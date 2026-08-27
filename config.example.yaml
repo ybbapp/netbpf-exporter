@@ -1,0 +1,11 @@
+# Optional YAML base configuration. NF_* environment variables
+# take precedence; the exporter can also run without this file.
+listen_address: ":9101"
+
+# Only these interfaces receive TC programs and appear in peer metrics.
+# Interface names are resolved at startup; use explicit names in containers.
+interfaces:
+  - eth0
+
+top_n_peers: 500
+peer_idle_ttl: 15m
