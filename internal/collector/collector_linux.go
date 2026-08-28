@@ -36,6 +36,21 @@ type attachment struct {
 	addedQdisc bool
 }
 
+type otherKey struct {
+	Ifindex   uint32
+	Protocol  uint8
+	Direction uint8
+}
+
+type observedSample struct {
+	key           peers.Key
+	interfaceName string
+	peer          netip.Addr
+	current       peers.Value
+	delta         peers.Value
+	lastSeen      time.Time
+}
+
 type Collector struct {
 	mu sync.Mutex
 
@@ -45,11 +60,16 @@ type Collector struct {
 	attachments   []attachment
 	interfaces    map[uint32]string
 
-	topN      int
-	idleTTL   time.Duration
-	previous  map[peers.Key]peers.Value
-	lastSeen  map[peers.Key]time.Time
-	scrapeErr prometheus.Counter
+	topN             int
+	idleTTL          time.Duration
+	minPeerBandwidth uint64
+	previous         map[peers.Key]peers.Value
+	exported         map[peers.Key]peers.Value
+	lastSeen         map[peers.Key]time.Time
+	other            map[otherKey]peers.Value
+	otherSeen        map[otherKey]time.Time
+	lastSnapshot     time.Time
+	scrapeErr        prometheus.Counter
 
 	bytesDesc   *prometheus.Desc
 	packetsDesc *prometheus.Desc
@@ -61,11 +81,15 @@ func New(cfg config.Config) (*Collector, error) {
 	}
 
 	c := &Collector{
-		interfaces: make(map[uint32]string, len(cfg.Interfaces)),
-		topN:       cfg.TopNPeers,
-		idleTTL:    cfg.PeerIdleTTL,
-		previous:   make(map[peers.Key]peers.Value),
-		lastSeen:   make(map[peers.Key]time.Time),
+		interfaces:       make(map[uint32]string, len(cfg.Interfaces)),
+		topN:             cfg.TopNPeers,
+		idleTTL:          cfg.PeerIdleTTL,
+		minPeerBandwidth: uint64(cfg.MinPeerBandwidth),
+		previous:         make(map[peers.Key]peers.Value),
+		exported:         make(map[peers.Key]peers.Value),
+		lastSeen:         make(map[peers.Key]time.Time),
+		other:            make(map[otherKey]peers.Value),
+		otherSeen:        make(map[otherKey]time.Time),
 		bytesDesc: prometheus.NewDesc(
 			"node_network_peer_bytes_total",
 			"Total bytes observed for a TCP or UDP peer.",
@@ -113,7 +137,7 @@ func New(cfg config.Config) (*Collector, error) {
 		}
 	}
 
-	slog.Info("attached eBPF TC peer collector", "interfaces", cfg.Interfaces, "top_n_peers", cfg.TopNPeers, "peer_idle_ttl", cfg.PeerIdleTTL)
+	slog.Info("attached eBPF TC peer collector", "interfaces", cfg.Interfaces, "top_n_peers", cfg.TopNPeers, "peer_idle_ttl", cfg.PeerIdleTTL, "min_peer_bandwidth_bytes_per_second", cfg.MinPeerBandwidth)
 	return c, nil
 }
 
@@ -233,7 +257,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	for _, sample := range samples {
 		protocol := peers.ProtocolName(sample.Protocol)
 		direction := peers.DirectionName(sample.Direction)
-		peerIP := sample.Peer.String()
+		peerIP := peers.OtherPeerLabel
+		if sample.Peer.IsValid() {
+			peerIP = sample.Peer.String()
+		}
 		ch <- prometheus.MustNewConstMetric(c.bytesDesc, prometheus.CounterValue, float64(sample.Bytes), sample.Interface, protocol, peerIP, direction)
 		ch <- prometheus.MustNewConstMetric(c.packetsDesc, prometheus.CounterValue, float64(sample.Packets), sample.Interface, protocol, peerIP, direction)
 	}
@@ -242,7 +269,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 func (c *Collector) snapshot(now time.Time) ([]peers.Sample, error) {
 	iterator := c.objects.PeerCounters.Iterate()
-	samples := make([]peers.Sample, 0)
+	observed := make([]observedSample, 0)
+	byKey := make(map[peers.Key]observedSample)
 	seen := make(map[peers.Key]struct{})
 	expired := make([]peers.Key, 0)
 	var key peers.Key
@@ -259,14 +287,8 @@ func (c *Collector) snapshot(now time.Time) ([]peers.Sample, error) {
 
 		current := sumValues(values)
 		previous, hadPrevious := c.previous[key]
-		rankBytes := current.Bytes
-		changed := true
-		if hadPrevious {
-			changed = current != previous
-			if current.Bytes >= previous.Bytes {
-				rankBytes = current.Bytes - previous.Bytes
-			}
-		}
+		delta := deltaValues(current, previous, hadPrevious)
+		changed := !hadPrevious || current != previous
 		lastSeen := c.lastSeen[key]
 		if !hadPrevious || changed {
 			lastSeen = now
@@ -279,11 +301,12 @@ func (c *Collector) snapshot(now time.Time) ([]peers.Sample, error) {
 			expired = append(expired, key)
 			continue
 		}
-		samples = append(samples, peers.Sample{
-			Key: key, Interface: interfaceName, Peer: peerIP,
-			Bytes: current.Bytes, Packets: current.Packets,
-			RankBytes: rankBytes, LastSeen: lastSeen,
-		})
+		item := observedSample{
+			key: key, interfaceName: interfaceName, peer: peerIP,
+			current: current, delta: delta, lastSeen: lastSeen,
+		}
+		observed = append(observed, item)
+		byKey[key] = item
 	}
 	if err := iterator.Err(); err != nil {
 		return nil, fmt.Errorf("iterate peer map: %w", err)
@@ -292,6 +315,7 @@ func (c *Collector) snapshot(now time.Time) ([]peers.Sample, error) {
 		if _, ok := seen[oldKey]; !ok {
 			delete(c.previous, oldKey)
 			delete(c.lastSeen, oldKey)
+			delete(c.exported, oldKey)
 		}
 	}
 	for _, oldKey := range expired {
@@ -300,10 +324,110 @@ func (c *Collector) snapshot(now time.Time) ([]peers.Sample, error) {
 		}
 		delete(c.previous, oldKey)
 		delete(c.lastSeen, oldKey)
+		delete(c.exported, oldKey)
 	}
 
-	selected, _ := peers.SelectTopPeers(samples, c.topN, now, c.idleTTL)
+	firstSnapshot := c.lastSnapshot.IsZero()
+	if firstSnapshot {
+		c.lastSnapshot = now
+	}
+	if c.minPeerBandwidth == 0 {
+		samples := make([]peers.Sample, 0, len(observed))
+		for _, item := range observed {
+			rankBytes := item.delta.Bytes
+			if firstSnapshot {
+				rankBytes = item.current.Bytes
+			}
+			samples = append(samples, peers.Sample{
+				Key: item.key, Interface: item.interfaceName, Peer: item.peer,
+				Bytes: item.current.Bytes, Packets: item.current.Packets,
+				RankBytes: rankBytes, LastSeen: item.lastSeen,
+			})
+		}
+		if !firstSnapshot {
+			c.lastSnapshot = now
+		}
+		selected, _ := peers.SelectTopPeers(samples, c.topN, now, c.idleTTL)
+		return selected, nil
+	}
+	if firstSnapshot {
+		return nil, nil
+	}
+
+	elapsed := now.Sub(c.lastSnapshot)
+	windowSamples := make([]peers.Sample, 0, len(observed))
+	for _, item := range observed {
+		windowSamples = append(windowSamples, peers.Sample{
+			Key: item.key, Interface: item.interfaceName, Peer: item.peer,
+			RankBytes: item.delta.Bytes, LastSeen: item.lastSeen,
+		})
+	}
+	above, below := peers.SplitByBandwidth(windowSamples, elapsed, c.minPeerBandwidth)
+	for _, sample := range below {
+		item := byKey[sample.Key]
+		if item.delta.Bytes == 0 && item.delta.Packets == 0 {
+			continue
+		}
+		key := otherKey{Ifindex: item.key.Ifindex, Protocol: item.key.Protocol, Direction: item.key.Direction}
+		other := c.other[key]
+		other.Bytes += item.delta.Bytes
+		other.Packets += item.delta.Packets
+		c.other[key] = other
+		c.otherSeen[key] = now
+	}
+
+	highSamples := make([]peers.Sample, 0, len(above))
+	for _, sample := range above {
+		item := byKey[sample.Key]
+		exported := c.exported[item.key]
+		exported.Bytes += item.delta.Bytes
+		exported.Packets += item.delta.Packets
+		c.exported[item.key] = exported
+		sample.Bytes = exported.Bytes
+		sample.Packets = exported.Packets
+		highSamples = append(highSamples, sample)
+	}
+
+	selected, _ := peers.SelectTopPeers(highSamples, c.topN, now, c.idleTTL)
+	selected = append(selected, c.otherSamples(now)...)
+	c.lastSnapshot = now
 	return selected, nil
+}
+
+func deltaValues(current, previous peers.Value, hadPrevious bool) peers.Value {
+	if !hadPrevious {
+		return current
+	}
+	delta := peers.Value{}
+	if current.Bytes >= previous.Bytes {
+		delta.Bytes = current.Bytes - previous.Bytes
+	} else {
+		delta.Bytes = current.Bytes
+	}
+	if current.Packets >= previous.Packets {
+		delta.Packets = current.Packets - previous.Packets
+	} else {
+		delta.Packets = current.Packets
+	}
+	return delta
+}
+
+func (c *Collector) otherSamples(now time.Time) []peers.Sample {
+	samples := make([]peers.Sample, 0, len(c.other))
+	for key, value := range c.other {
+		lastSeen := c.otherSeen[key]
+		if lastSeen.IsZero() || now.Sub(lastSeen) >= c.idleTTL {
+			delete(c.other, key)
+			delete(c.otherSeen, key)
+			continue
+		}
+		samples = append(samples, peers.Sample{
+			Key:       peers.Key{Ifindex: key.Ifindex, Protocol: key.Protocol, Direction: key.Direction},
+			Interface: c.interfaces[key.Ifindex], Bytes: value.Bytes, Packets: value.Packets,
+			Peer: netip.Addr{}, LastSeen: lastSeen,
+		})
+	}
+	return samples
 }
 
 func sumValues(values []peers.Value) peers.Value {

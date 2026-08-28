@@ -54,6 +54,22 @@ func TestSelectTopPeersRanksByRefreshBytes(t *testing.T) {
 	}
 }
 
+func TestSplitByBandwidthAggregatesPeerIPGlobally(t *testing.T) {
+	now := time.Unix(100, 0)
+	peerA := netip.MustParseAddr("192.0.2.1")
+	peerB := netip.MustParseAddr("192.0.2.2")
+	samples := []Sample{
+		{Key: Key{Ifindex: 1, Protocol: ProtocolTCP, Direction: DirectionRX}, Peer: peerA, RankBytes: 60, LastSeen: now},
+		{Key: Key{Ifindex: 2, Protocol: ProtocolUDP, Direction: DirectionTX}, Peer: peerA, RankBytes: 50, LastSeen: now},
+		{Key: Key{Ifindex: 1, Protocol: ProtocolTCP, Direction: DirectionRX}, Peer: peerB, RankBytes: 99, LastSeen: now},
+	}
+
+	above, below := SplitByBandwidth(samples, time.Second, 100)
+	if len(above) != 2 || len(below) != 1 || above[0].Peer != peerA || above[1].Peer != peerA || below[0].Peer != peerB {
+		t.Fatalf("got above=%v below=%v, want peer A above and peer B below", above, below)
+	}
+}
+
 func TestProtocolAndDirectionNames(t *testing.T) {
 	if got := ProtocolName(ProtocolTCP); got != "tcp" {
 		t.Fatalf("protocol name = %q", got)

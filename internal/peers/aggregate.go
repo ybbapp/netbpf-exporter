@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	ProtocolTCP = 6
-	ProtocolUDP = 17
-	DirectionRX = 0
-	DirectionTX = 1
+	ProtocolTCP    = 6
+	ProtocolUDP    = 17
+	DirectionRX    = 0
+	DirectionTX    = 1
+	OtherPeerLabel = "other"
 )
 
 // Key is the eBPF map key. Ifindex is used in the kernel because interface
@@ -94,6 +95,37 @@ func SelectTopPeers(samples []Sample, n int, now time.Time, idleTTL time.Duratio
 		return output[i].Direction < output[j].Direction
 	})
 	return output, active
+}
+
+// SplitByBandwidth classifies samples by the aggregate byte rate of each
+// peer IP. RankBytes must contain the bytes observed during the current
+// refresh interval.
+func SplitByBandwidth(samples []Sample, elapsed time.Duration, minBytesPerSecond uint64) (above, below []Sample) {
+	if minBytesPerSecond == 0 {
+		return append([]Sample(nil), samples...), nil
+	}
+	if elapsed <= 0 {
+		return nil, append([]Sample(nil), samples...)
+	}
+
+	bytesByPeer := make(map[netip.Addr]uint64)
+	for _, sample := range samples {
+		if sample.Peer.IsValid() {
+			bytesByPeer[sample.Peer] += sample.RankBytes
+		}
+	}
+	threshold := float64(minBytesPerSecond) * elapsed.Seconds()
+	for _, sample := range samples {
+		if !sample.Peer.IsValid() {
+			continue
+		}
+		if float64(bytesByPeer[sample.Peer]) >= threshold {
+			above = append(above, sample)
+		} else {
+			below = append(below, sample)
+		}
+	}
+	return above, below
 }
 
 func ProtocolName(protocol uint8) string {

@@ -9,3 +9,4 @@ interfaces:
 
 top_n_peers: 500
 peer_idle_ttl: 15m
+min_peer_bandwidth: 10kb

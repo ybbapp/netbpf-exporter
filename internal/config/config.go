@@ -12,29 +12,48 @@ import (
 )
 
 const (
-	DefaultListenAddress = ":9101"
-	DefaultTopN          = 500
-	DefaultPeerIdleTTL   = 15 * time.Minute
+	DefaultListenAddress             = ":9101"
+	DefaultTopN                      = 500
+	DefaultPeerIdleTTL               = 15 * time.Minute
+	DefaultMinPeerBandwidth ByteRate = 10_000
 
-	EnvConfigFile    = "NF_CONFIG_FILE"
-	EnvListenAddress = "NF_LISTEN_ADDRESS"
-	EnvInterfaces    = "NF_INTERFACES"
-	EnvTopNPeers     = "NF_TOP_N_PEERS"
-	EnvPeerIdleTTL   = "NF_PEER_IDLE_TTL"
+	EnvConfigFile       = "NF_CONFIG_FILE"
+	EnvListenAddress    = "NF_LISTEN_ADDRESS"
+	EnvInterfaces       = "NF_INTERFACES"
+	EnvTopNPeers        = "NF_TOP_N_PEERS"
+	EnvPeerIdleTTL      = "NF_PEER_IDLE_TTL"
+	EnvMinPeerBandwidth = "NF_MIN_PEER_BANDWIDTH"
 )
 
+type ByteRate uint64
+
+var byteRateUnits = []struct {
+	suffix     string
+	multiplier uint64
+}{
+	{suffix: "gib", multiplier: 1 << 30},
+	{suffix: "mib", multiplier: 1 << 20},
+	{suffix: "kib", multiplier: 1 << 10},
+	{suffix: "gb", multiplier: 1_000_000_000},
+	{suffix: "mb", multiplier: 1_000_000},
+	{suffix: "kb", multiplier: 1_000},
+	{suffix: "b", multiplier: 1},
+}
+
 type Config struct {
-	ListenAddress string        `yaml:"listen_address"`
-	Interfaces    []string      `yaml:"interfaces"`
-	TopNPeers     int           `yaml:"top_n_peers"`
-	PeerIdleTTL   time.Duration `yaml:"peer_idle_ttl"`
+	ListenAddress    string        `yaml:"listen_address"`
+	Interfaces       []string      `yaml:"interfaces"`
+	TopNPeers        int           `yaml:"top_n_peers"`
+	PeerIdleTTL      time.Duration `yaml:"peer_idle_ttl"`
+	MinPeerBandwidth ByteRate      `yaml:"min_peer_bandwidth"`
 }
 
 func Default() Config {
 	return Config{
-		ListenAddress: DefaultListenAddress,
-		TopNPeers:     DefaultTopN,
-		PeerIdleTTL:   DefaultPeerIdleTTL,
+		ListenAddress:    DefaultListenAddress,
+		TopNPeers:        DefaultTopN,
+		PeerIdleTTL:      DefaultPeerIdleTTL,
+		MinPeerBandwidth: DefaultMinPeerBandwidth,
 	}
 }
 
@@ -87,6 +106,55 @@ func applyEnvironment(cfg *Config) error {
 		}
 		cfg.PeerIdleTTL = ttl
 	}
+	if value, ok := os.LookupEnv(EnvMinPeerBandwidth); ok {
+		bandwidth, err := ParseByteRate(value)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", EnvMinPeerBandwidth, err)
+		}
+		cfg.MinPeerBandwidth = bandwidth
+	}
+	return nil
+}
+
+func ParseByteRate(value string) (ByteRate, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return 0, errors.New("byte rate must not be empty")
+	}
+
+	multiplier := uint64(1)
+	number := normalized
+	for _, unit := range byteRateUnits {
+		if strings.HasSuffix(normalized, unit.suffix) {
+			number = strings.TrimSuffix(normalized, unit.suffix)
+			multiplier = unit.multiplier
+			break
+		}
+	}
+	if number == "" {
+		return 0, fmt.Errorf("invalid byte rate %q", value)
+	}
+	for _, char := range number {
+		if char < '0' || char > '9' {
+			return 0, fmt.Errorf("invalid byte rate %q", value)
+		}
+	}
+	amount, err := strconv.ParseUint(number, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid byte rate %q: %w", value, err)
+	}
+	if amount > ^uint64(0)/multiplier {
+		return 0, fmt.Errorf("byte rate %q overflows uint64", value)
+	}
+	return ByteRate(amount * multiplier), nil
+}
+
+func (r *ByteRate) UnmarshalYAML(value *yaml.Node) error {
+	parsed, err := ParseByteRate(value.Value)
+	if err != nil {
+		return err
+	}
+	*r = parsed
 	return nil
 }
 

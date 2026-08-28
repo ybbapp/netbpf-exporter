@@ -18,11 +18,12 @@ export NF_LISTEN_ADDRESS=:9101
 export NF_INTERFACES=eth0,eth1
 export NF_TOP_N_PEERS=500
 export NF_PEER_IDLE_TTL=15m
+export NF_MIN_PEER_BANDWIDTH=10kb
 ./bin/netbpf-exporter
 ```
 
 Supported variables are `NF_LISTEN_ADDRESS`, `NF_INTERFACES` (comma-separated),
-`NF_TOP_N_PEERS`, and `NF_PEER_IDLE_TTL`.
+`NF_TOP_N_PEERS`, `NF_PEER_IDLE_TTL`, and `NF_MIN_PEER_BANDWIDTH`.
 `NF_CONFIG_FILE` optionally supplies the YAML path when `-config.file` is not
 set.
 
@@ -33,6 +34,7 @@ interfaces:
   - eth1
 top_n_peers: 500
 peer_idle_ttl: 15m
+min_peer_bandwidth: 10kb
 ```
 
 `top_n_peers` is ranked globally by unique peer IP. Bytes from all configured
@@ -44,6 +46,18 @@ Ranking uses the byte increase since the previous scrape. The exported values
 remain cumulative counters from the eBPF map. A peer that has not changed for
 `peer_idle_ttl` is deleted from the map and disappears from metrics on the
 next scrape.
+
+`min_peer_bandwidth` defaults to `10kb` and accepts byte-rate values such as
+`10kb`, `100mb`, and `1gib`. The value is interpreted as bytes per second even
+though `/s` is omitted. `kb`, `mb`, and `gb` use decimal multipliers; `kib`,
+`mib`, and `gib` use binary multipliers. Bit units and a `/s` suffix are not
+accepted.
+
+The threshold is calculated globally per peer IP across all configured
+interfaces, protocols, and directions. Traffic from peers below the threshold
+is aggregated under `peer_ip="other"` during each scrape interval. The
+`other` series retains `interface`, `protocol`, and `direction` labels and is
+not counted as a real peer for `top_n_peers`.
 
 The exporter exposes:
 
@@ -65,7 +79,7 @@ clang, LLVM, libbpf headers, and Linux headers:
 ```sh
 make generate
 make build
-NF_INTERFACES=eth0 ./bin/netbpf-exporter
+NF_INTERFACES=eth0 NF_MIN_PEER_BANDWIDTH=10kb ./bin/netbpf-exporter
 ```
 
 `GOPROXY` defaults to `https://proxy.golang.org,direct` and can be changed
@@ -83,6 +97,7 @@ The Docker image builds the eBPF objects inside a Linux environment:
 docker build -t netbpf-exporter .
 docker run --rm --privileged --network host \
   -e NF_INTERFACES=eth0 \
+  -e NF_MIN_PEER_BANDWIDTH=10kb \
   netbpf-exporter
 ```
 
