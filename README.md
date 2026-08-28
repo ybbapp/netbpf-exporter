@@ -90,9 +90,56 @@ With host networking, `interfaces` names refer to the host network namespace.
 Without host networking, the exporter only sees and instruments interfaces in
 the container's own network namespace.
 
+An example Compose file is provided at `docker-compose.yml`. It uses
+the public GHCR image and passes configuration through `NF_*` variables:
+
+```sh
+NF_INTERFACES=eth0,eth1 docker compose -f docker-compose.yml up -d
+docker compose -f docker-compose.yml logs -f
+docker compose -f docker-compose.yml down
+```
+
+## Grafana
+
+The dashboard example at `grafana/netbpf-exporter-dashboard.json` can be
+imported into Grafana with a Prometheus data source. It includes filters for
+interface, protocol, direction, and the displayed Top peers count. The
+dashboard uses `rate()` over the cumulative exporter counters, so the selected
+Prometheus scrape interval should be stable. Its `Period Top Peers` section
+uses `increase()` over the selected dashboard time range to rank peers by
+total bytes during that period. The peer ranking is shown as a traffic-share
+pie chart alongside a table containing the peer label and exact byte total.
+
 Unit tests run without BPF privileges:
 
 ```sh
 make test
 make docker-test
 ```
+
+## Prometheus DNS Targets
+
+The deployment-local script
+`/Users/evlic/docker.data/remotedocker/derper/generate-derp-file-sd.py`
+resolves the DERP hostnames and generates Prometheus file-based service
+discovery targets for ports 9100 and 9101. The generated targets contain only
+`IP:port` values and no hostname label:
+
+```sh
+/Users/evlic/docker.data/remotedocker/derper/generate-derp-file-sd.py \
+  /etc/prometheus/file_sd/derp.yml
+```
+
+Configure Prometheus to watch the generated file:
+
+```yaml
+scrape_configs:
+  - job_name: derp
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/derp.yml
+        refresh_interval: 1m
+```
+
+Run the script periodically with cron or a systemd timer. Prometheus reloads
+the file automatically when its contents change.
