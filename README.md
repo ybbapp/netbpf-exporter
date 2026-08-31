@@ -128,6 +128,23 @@ uses `increase()` over the selected dashboard time range to rank peers by
 total bytes during that period. The peer ranking is shown as a traffic-share
 pie chart alongside a table containing the peer label and exact byte total.
 
+The dashboard is organized into global and individual views:
+
+- `Selected Node - Realtime Traffic` and `Selected Node - Period Top Peers`
+  use the `nodename` filter.
+- `Global Traffic - All Nodes` and `Global Peer - All Nodes` intentionally omit
+  the `nodename` matcher and aggregate all nodes.
+- `Global Traffic by Node` aggregates by `nodename` for node-to-node
+  comparison.
+- `Selected Node - IP and Peer IP Detail` shows the Prometheus `instance`
+  target address as `IP` together with `peer_ip`, protocol, and direction.
+
+The same layout can be applied to official `node_exporter`: global queries
+omit `instance`, while individual queries filter or aggregate by `instance`.
+Official `node_exporter` exposes `nodename` on `node_uname_info`, not on every
+metric, so a dashboard that needs hostname filtering for standard node metrics
+must either use `instance` directly or join metrics with `node_uname_info`.
+
 Unit tests run without BPF privileges:
 
 ```sh
