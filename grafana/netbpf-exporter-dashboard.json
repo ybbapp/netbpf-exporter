@@ -101,7 +101,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "topk($topk, sum by (peer_ip) (rate(node_network_peer_bytes_total{interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[5m])))",
+          "expr": "topk($topk, sum by (peer_ip) (rate(node_network_peer_bytes_total{nodename=~\"$nodename\", interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[5m])))",
           "legendFormat": "{{peer_ip}}",
           "range": true,
           "refId": "A"
@@ -145,17 +145,42 @@
               "mode": "off"
             }
           },
-          "unit": "Bps"
+        "unit": "Bps"
+      },
+      "overrides": [
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "rx"
+          },
+          "properties": [
+            {
+              "id": "displayName",
+              "value": "Receive"
+            }
+          ]
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 1
-      },
-      "id": 2,
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "tx"
+          },
+          "properties": [
+            {
+              "id": "displayName",
+              "value": "Transmit"
+            }
+          ]
+        }
+      ]
+    },
+    "gridPos": {
+      "h": 8,
+      "w": 8,
+      "x": 16,
+      "y": 1
+    },
+    "id": 2,
       "options": {
         "legend": {
           "calcs": [
@@ -173,7 +198,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (direction) (rate(node_network_peer_bytes_total{interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[5m]))",
+          "expr": "sum by (direction) (rate(node_network_peer_bytes_total{nodename=~\"$nodename\", interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[5m]))",
           "legendFormat": "{{direction}}",
           "range": true,
           "refId": "A"
@@ -245,7 +270,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "topk($topk, sum by (peer_ip) (rate(node_network_peer_packets_total{interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[5m])))",
+          "expr": "topk($topk, sum by (peer_ip) (rate(node_network_peer_packets_total{nodename=~\"$nodename\", interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[5m])))",
           "legendFormat": "{{peer_ip}}",
           "range": true,
           "refId": "A"
@@ -302,7 +327,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "count(count by (peer_ip) (node_network_peer_bytes_total{interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}))",
+          "expr": "count(count by (peer_ip) (node_network_peer_bytes_total{nodename=~\"$nodename\", interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}))",
           "legendFormat": "active peers",
           "range": true,
           "refId": "A"
@@ -373,7 +398,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (protocol) (rate(node_network_peer_bytes_total{interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[5m]))",
+          "expr": "sum by (protocol) (rate(node_network_peer_bytes_total{nodename=~\"$nodename\", interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[5m]))",
           "legendFormat": "{{protocol}}",
           "range": true,
           "refId": "A"
@@ -447,14 +472,14 @@
         "sortBy": [
           {
             "desc": true,
-            "displayName": "Total bytes"
+            "displayName": "Last"
           }
         ]
       },
       "targets": [
         {
           "editorMode": "code",
-          "expr": "topk($topk, sum by (peer_ip) (increase(node_network_peer_bytes_total{interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[$__range])))",
+          "expr": "topk($topk, sum by (peer_ip) (increase(node_network_peer_bytes_total{nodename=~\"$nodename\", interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[$__range])))",
           "format": "table",
           "instant": true,
           "legendFormat": "{{peer_ip}}",
@@ -474,7 +499,7 @@
               "Value": 1
             },
             "renameByName": {
-              "Value": "Total bytes",
+              "Value": "Last",
               "peer_ip": "Peer IP"
             }
           }
@@ -537,7 +562,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "topk($topk, sum by (peer_ip) (increase(node_network_peer_bytes_total{interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[$__range])))",
+          "expr": "topk($topk, sum by (peer_ip) (increase(node_network_peer_bytes_total{nodename=~\"$nodename\", interface=~\"$interface\", protocol=~\"$protocol\", direction=~\"$direction\"}[$__range])))",
           "instant": true,
           "legendFormat": "{{peer_ip}}",
           "range": false,
@@ -591,6 +616,28 @@
         "name": "interface",
         "options": [],
         "query": "label_values(node_network_peer_bytes_total, interface)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        },
+        "definition": "label_values(node_network_peer_bytes_total, nodename)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Node name",
+        "name": "nodename",
+        "options": [],
+        "query": "label_values(node_network_peer_bytes_total, nodename)",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,

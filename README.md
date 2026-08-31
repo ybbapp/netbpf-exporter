@@ -62,8 +62,8 @@ not counted as a real peer for `top_n_peers`.
 The exporter exposes:
 
 ```text
-node_network_peer_bytes_total{interface,protocol,peer_ip,direction}
-node_network_peer_packets_total{interface,protocol,peer_ip,direction}
+node_network_peer_bytes_total{nodename,interface,protocol,peer_ip,direction}
+node_network_peer_packets_total{nodename,interface,protocol,peer_ip,direction}
 ```
 
 The TC program uses `src_ip` for ingress/rx and `dst_ip` for egress/tx. It
@@ -96,6 +96,7 @@ The Docker image builds the eBPF objects inside a Linux environment:
 ```sh
 docker build -t netbpf-exporter .
 docker run --rm --privileged --network host \
+  --uts=host \
   -e NF_INTERFACES=eth0 \
   -e NF_MIN_PEER_BANDWIDTH=10kb \
   netbpf-exporter
@@ -118,9 +119,11 @@ docker compose -f docker-compose.yml down
 
 The dashboard example at `grafana/netbpf-exporter-dashboard.json` can be
 imported into Grafana with a Prometheus data source. It includes filters for
-interface, protocol, direction, and the displayed Top peers count. The
-dashboard uses `rate()` over the cumulative exporter counters, so the selected
-Prometheus scrape interval should be stable. Its `Period Top Peers` section
+node name, interface, protocol, direction, and the displayed Top peers count.
+The exporter provides the `nodename` label from Linux `uname()`. When running
+in Docker, use the host UTS namespace as shown above if the dashboard should
+filter by the host's nodename. The dashboard uses `rate()` over the cumulative exporter counters, so
+the selected Prometheus scrape interval should be stable. Its `Period Top Peers` section
 uses `increase()` over the selected dashboard time range to rank peers by
 total bytes during that period. The peer ranking is shown as a traffic-share
 pie chart alongside a table containing the peer label and exact byte total.
@@ -138,7 +141,7 @@ The deployment-local script
 `/Users/evlic/docker.data/remotedocker/derper/generate-derp-file-sd.py`
 resolves the DERP hostnames and generates Prometheus file-based service
 discovery targets for ports 9100 and 9101. The generated targets contain only
-`IP:port` values and no hostname label:
+`IP:port` values; `netbpf-exporter` adds the `nodename` label itself:
 
 ```sh
 /Users/evlic/docker.data/remotedocker/derper/generate-derp-file-sd.py \

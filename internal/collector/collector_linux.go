@@ -56,6 +56,7 @@ type Collector struct {
 
 	objects       bpf.BpfObjects
 	objectsLoaded bool
+	nodeName      string
 	tc            *tc.Tc
 	attachments   []attachment
 	interfaces    map[uint32]string
@@ -79,9 +80,14 @@ func New(cfg config.Config) (*Collector, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	nodeName, err := readNodeName()
+	if err != nil {
+		return nil, fmt.Errorf("read node name: %w", err)
+	}
 
 	c := &Collector{
 		interfaces:       make(map[uint32]string, len(cfg.Interfaces)),
+		nodeName:         nodeName,
 		topN:             cfg.TopNPeers,
 		idleTTL:          cfg.PeerIdleTTL,
 		minPeerBandwidth: uint64(cfg.MinPeerBandwidth),
@@ -93,12 +99,12 @@ func New(cfg config.Config) (*Collector, error) {
 		bytesDesc: prometheus.NewDesc(
 			"node_network_peer_bytes_total",
 			"Total bytes observed for a TCP or UDP peer.",
-			[]string{"interface", "protocol", "peer_ip", "direction"}, nil,
+			[]string{"nodename", "interface", "protocol", "peer_ip", "direction"}, nil,
 		),
 		packetsDesc: prometheus.NewDesc(
 			"node_network_peer_packets_total",
 			"Total packets observed for a TCP or UDP peer.",
-			[]string{"interface", "protocol", "peer_ip", "direction"}, nil,
+			[]string{"nodename", "interface", "protocol", "peer_ip", "direction"}, nil,
 		),
 		scrapeErr: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "netbpf_exporter_scrape_errors_total",
@@ -139,6 +145,14 @@ func New(cfg config.Config) (*Collector, error) {
 
 	slog.Info("attached eBPF TC peer collector", "interfaces", cfg.Interfaces, "top_n_peers", cfg.TopNPeers, "peer_idle_ttl", cfg.PeerIdleTTL, "min_peer_bandwidth_bytes_per_second", cfg.MinPeerBandwidth)
 	return c, nil
+}
+
+func readNodeName() (string, error) {
+	var utsname unix.Utsname
+	if err := unix.Uname(&utsname); err != nil {
+		return "", err
+	}
+	return unix.ByteSliceToString(utsname.Nodename[:]), nil
 }
 
 func (c *Collector) attachInterface(ifindex uint32, name string) error {
@@ -261,8 +275,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		if sample.Peer.IsValid() {
 			peerIP = sample.Peer.String()
 		}
-		ch <- prometheus.MustNewConstMetric(c.bytesDesc, prometheus.CounterValue, float64(sample.Bytes), sample.Interface, protocol, peerIP, direction)
-		ch <- prometheus.MustNewConstMetric(c.packetsDesc, prometheus.CounterValue, float64(sample.Packets), sample.Interface, protocol, peerIP, direction)
+		ch <- prometheus.MustNewConstMetric(c.bytesDesc, prometheus.CounterValue, float64(sample.Bytes), c.nodeName, sample.Interface, protocol, peerIP, direction)
+		ch <- prometheus.MustNewConstMetric(c.packetsDesc, prometheus.CounterValue, float64(sample.Packets), c.nodeName, sample.Interface, protocol, peerIP, direction)
 	}
 	ch <- c.scrapeErr
 }

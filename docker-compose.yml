@@ -4,6 +4,7 @@ services:
     container_name: netbpf-exporter
     restart: unless-stopped
     network_mode: host
+    uts: host
     privileged: true
     environment:
       NF_LISTEN_ADDRESS: "${NF_LISTEN_ADDRESS:-:9101}"
